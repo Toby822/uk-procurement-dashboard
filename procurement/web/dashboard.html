@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UK Procurement Data Visualisation Dashboard</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f3f6f7;color:#1a252d;font:16px/1.45 system-ui,sans-serif}
+main{width:min(1100px,calc(100% - 40px));margin:42px auto}
+header{padding:0 0 24px;border-bottom:1px solid #cad5da}
+h1{font-size:clamp(1.85rem,4vw,3.3rem);line-height:1.12;margin:0 0 12px;letter-spacing:-.045em}
+h2{font-size:1.1rem;margin:0 0 12px}
+p{margin:0;color:#465760}a{color:#115f5b}
+.filters{display:flex;gap:12px;flex-wrap:wrap;margin:24px 0}
+label{display:grid;gap:4px;font-size:.82rem;font-weight:650}
+input,select,button{font:inherit;font-size:.92rem;line-height:1.25;color:inherit;background:#fff;border:1px solid #a9bbc1;border-radius:6px;height:42px;min-height:42px;padding:0 9px}
+#process{width:236px;max-width:100%}#tag{width:182px;max-width:100%;appearance:none;padding-right:30px;background:#fff linear-gradient(45deg,transparent 50%,#465760 50%) calc(100% - 16px) center/5px 5px no-repeat}button{cursor:pointer}button:hover{background:#dceceb}
+.summary{display:flex;gap:28px;flex-wrap:wrap;margin:0 0 22px}
+.summary div{min-width:130px;border-left:3px solid #178079;padding-left:11px}
+.summary strong{display:block;font-size:1.75rem;letter-spacing:-.045em}
+.summary span{font-size:.85rem;color:#465760}
+.grid{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-bottom:16px}
+.panel{background:#fff;padding:19px;border:1px solid #d9e4e7;border-radius:10px;min-width:0}
+.chart{display:grid;gap:5px}.row{display:grid;grid-template-columns:minmax(130px,1fr) minmax(70px,2fr) 42px;gap:10px;align-items:center;font-size:.84rem}
+.row button{height:auto;min-height:25px;text-align:left;border:0;padding:2px 3px;overflow-wrap:anywhere}
+.bar{height:13px;background:#e6eff0;border-radius:3px;overflow:hidden}
+.bar div{background:#187d76;height:100%;border-radius:3px}
+.small{font-size:.82rem}
+.history-controls{display:flex;gap:8px;align-items:end;flex-wrap:wrap}
+.history-controls input{max-width:100%}
+table{width:100%;border-collapse:collapse;font-size:.87rem;margin-top:13px;overflow-wrap:anywhere}
+th,td{text-align:left;padding:8px 5px;border-bottom:1px solid #e4edef}
+#status,#history-status{margin:8px 0}
+@media(max-width:660px){main{width:calc(100% - 24px);margin:23px auto}.grid{grid-template-columns:1fr}.panel{padding:13px}.summary{gap:14px}.row{grid-template-columns:minmax(99px,1.3fr) minmax(50px,1fr) 35px;gap:6px} #process{width:190px}}
+</style>
+</head>
+<body><main>
+<header>
+<h1>UK Procurement Data Visualisation Dashboard</h1>
+<p>Explore published notices in a 14-page sample from the UK <a href="https://www.find-tender.service.gov.uk/">Find a Tender</a> API. Dates use UTC.</p>
+</header>
+<section class="filters" aria-label="Filters">
+<label>From <input id="from" type="date"></label>
+<label>To <input id="to" type="date"></label>
+<label>Notice tag <select id="tag"><option value="">All tags</option></select></label>
+<label>Process ID <input id="process" type="text" spellcheck="false" placeholder="e.g. ocds-h6vhtk-029897"></label>
+<button id="reset" type="button">Clear filters</button>
+</section>
+<div class="summary" aria-live="polite">
+<div><strong id="release-count"></strong><span>Notice releases</span></div>
+<div><strong id="process-count"></strong><span>Procurement processes</span></div>
+<div><strong id="multi-count"></strong><span>Processes with multiple releases</span></div>
+</div>
+<p id="status" class="small" role="status"></p>
+<div class="grid">
+<section class="panel"><h2>Notices by publication date</h2><div class="chart" id="dates"></div></section>
+<section class="panel"><h2>Notice tags</h2><p class="small">One notice can carry multiple tags.</p><div class="chart" id="tags"></div></section>
+</div>
+<section class="panel">
+<h2>Publication history</h2>
+<div class="history-controls"><label>As of (UTC) <input id="asof" type="datetime-local" step="1"></label><button id="sample" type="button">Load a sample process</button></div>
+<p id="history-status" class="small" aria-live="polite"></p>
+<table aria-label="Publication history"><thead><tr><th>Published UTC</th><th>Notice ID</th><th>Tags</th></tr></thead><tbody id="history"></tbody></table>
+</section>
+</main>
+<script>
+"use strict";
+const data = /*__NOTICE_DATA__*/;
+const notices = data.map(row => ({...row, time: new Date(row.date).toISOString()}))
+    .sort((a, b) => a.time.localeCompare(b.time) || a.id.localeCompare(b.id));
+const id = name => document.getElementById(name);
+const fmt = Intl.NumberFormat("en-GB");
+const tagLabel = tag => tag.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+const distinctTags = [...new Set(notices.flatMap(row => row.tag))].sort();
+for (const tag of distinctTags) id("tag").add(new Option(tagLabel(tag), tag));
+
+function counts(items, keys) {
+  const tally = new Map();
+  for (const row of items) for (const key of keys(row)) tally.set(key, (tally.get(key) ?? 0) + 1);
+  return tally;
+}
+
+function chart(container, pairs, select, display = x => x) {
+  const maximum = Math.max(1, ...pairs.map(([, n]) => n));
+  const rows = pairs.map(([label, n]) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const button = document.createElement("button");
+    button.textContent = display(label);
+    button.setAttribute("aria-label", "Filter by " + label);
+    button.addEventListener("click", () => select(label));
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    bar.setAttribute("aria-hidden", "true");
+    const fill = document.createElement("div");
+    fill.style.width = n / maximum * 100 + "%";
+    bar.append(fill);
+    const count = document.createElement("span");
+    count.textContent = fmt.format(n);
+    row.append(button, bar, count);
+    return row;
+  });
+  container.replaceChildren(...rows);
+}
+
+function update() {
+  const first = id("from").value;
+  const last = id("to").value;
+  const tag = id("tag").value;
+  const process = id("process").value.trim().toLowerCase();
+  const filtered = notices.filter(row => {
+    const day = row.time.slice(0, 10);
+    return (!first || day >= first) && (!last || day <= last) &&
+      (!tag || row.tag.includes(tag)) && (!process || row.ocid.toLowerCase().includes(process));
+  });
+  const processes = counts(filtered, row => [row.ocid]);
+  id("release-count").textContent = fmt.format(filtered.length);
+  id("process-count").textContent = fmt.format(processes.size);
+  id("multi-count").textContent = fmt.format([...processes.values()].filter(n => n > 1).length);
+  id("status").textContent = filtered.length ? "" : "No notices match these filters.";
+  chart(id("dates"), [...counts(filtered, row => [row.time.slice(0, 10)])], day => {
+    id("from").value = day; id("to").value = day; update();
+  });
+  chart(id("tags"), [...counts(filtered, row => row.tag)].sort((a,b) => b[1]-a[1]), value => {
+    id("tag").value = value; update();
+  }, tagLabel);
+  const cutoff = id("asof").value;
+  const boundary = cutoff ? new Date(cutoff + "Z").getTime() : Infinity;
+  const history = notices.filter(row => row.ocid === process && Date.parse(row.time) <= boundary);
+  id("history-status").textContent = process
+    ? fmt.format(history.length) + " releases for the exact process ID at this cutoff."
+    : "Enter a process ID to inspect its releases. The history uses the cutoff and exact ID.";
+  id("history").replaceChildren(...history.map(row => {
+    const tr = document.createElement("tr");
+    for (const value of [row.time.replace("T"," ").slice(0,19), row.id, row.tag.join(", ")]) {
+      const td = document.createElement("td"); td.textContent = value; tr.append(td);
+    }
+    return tr;
+  }));
+}
+for (const name of ["from","to","tag","process","asof"]) {
+  id(name).addEventListener("input",update);
+  id(name).addEventListener("change",update);
+}
+id("reset").addEventListener("click", () => {
+  for (const name of ["from", "to", "tag", "process", "asof"]) id(name).value = "";
+  update();
+});
+id("sample").addEventListener("click", () => {
+  const sample = [...counts(notices, row => [row.ocid])].find(([, n]) => n > 1);
+  if (!sample) return;
+  for (const name of ["from", "to", "tag", "asof"]) id(name).value = "";
+  id("process").value = sample[0];
+  update();
+});
+update();
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "pages": 14,
+  "releases": 1400,
+  "processes": 1311,
+  "processes_with_multiple_releases": 76,
+  "sha256": "f0b796f09072f1dbe60adec4f46430d673999fdeff111b804d1056f1a840a6a5",
+  "verified_histories": 76,
+  "verified_cutoffs": 165,
+  "pages_skipped_on_restart": 7,
+  "simulated_crash_exit_code": 71,
+  "restart_and_reverse_replay_match": true
+}
